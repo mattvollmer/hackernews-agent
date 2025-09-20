@@ -124,7 +124,7 @@ const fetchHNItem = async (id: number): Promise<any> => {
 
   const item = await requestPool.execute(async () => {
     const response = await fetch(
-      `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
+      `https://hacker-news.firebaseio.com/v0/item/${id}.json`
     );
     return response.json();
   });
@@ -142,7 +142,7 @@ const fetchTopStories = async (): Promise<number[]> => {
 
   const stories = await requestPool.execute(async () => {
     const response = await fetch(
-      "https://hacker-news.firebaseio.com/v0/topstories.json",
+      "https://hacker-news.firebaseio.com/v0/topstories.json"
     );
     return response.json();
   });
@@ -294,7 +294,7 @@ export default blink.agent({
                           "User-Agent":
                             "hn-summarizer/1.0 (+https://example.com)",
                         },
-                      }),
+                      })
                     );
                     const html = await res.text();
                     const content = extractArticleText(html);
@@ -319,7 +319,7 @@ export default blink.agent({
                     source: "error" as const,
                   };
                 }
-              }),
+              })
             );
 
             return {
@@ -381,7 +381,7 @@ export default blink.agent({
                     headers: {
                       "User-Agent": "hn-summarizer/1.0 (+https://example.com)",
                     },
-                  }),
+                  })
                 );
                 const html = await res.text();
                 article_content = extractArticleText(html);
@@ -399,7 +399,7 @@ export default blink.agent({
               let remaining = max_comments;
               const loadComment = async (
                 cid: number,
-                depth: number,
+                depth: number
               ): Promise<any | null> => {
                 if (remaining <= 0) return null;
                 try {
@@ -411,7 +411,7 @@ export default blink.agent({
                     by: c.by ?? null,
                     time: c.time ?? null,
                     time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
+                    text: strip_html ? stripHtml(c.text) : c.text ?? null,
                     parent: c.parent ?? null,
                     dead: !!c.dead,
                     deleted: !!c.deleted,
@@ -434,7 +434,7 @@ export default blink.agent({
                     ) {
                       const batch = c.kids.slice(i, i + batchSize);
                       const batchResults = await Promise.all(
-                        batch.map((kid) => loadComment(kid, depth + 1)),
+                        batch.map((kid: number) => loadComment(kid, depth + 1))
                       );
                       children.push(...batchResults.filter(Boolean));
                     }
@@ -456,7 +456,7 @@ export default blink.agent({
               ) {
                 const batch = (item.kids as number[]).slice(i, i + batchSize);
                 const batchResults = await Promise.all(
-                  batch.map((kid) => loadComment(kid, 0)),
+                  batch.map((kid) => loadComment(kid, 0))
                 );
                 topLevel.push(...batchResults.filter(Boolean));
               }
@@ -545,7 +545,7 @@ export default blink.agent({
                             "User-Agent":
                               "hn-summarizer/1.0 (+https://example.com)",
                           },
-                        }),
+                        })
                       );
                       const html = await res.text();
                       const text = extractArticleText(html);
@@ -565,7 +565,7 @@ export default blink.agent({
                     let remaining = max_comments;
                     const loadComment = async (
                       cid: number,
-                      depth: number,
+                      depth: number
                     ): Promise<void> => {
                       if (remaining <= 0) return;
                       try {
@@ -590,7 +590,9 @@ export default blink.agent({
                           ) {
                             const batch = c.kids.slice(i, i + batchSize);
                             await Promise.all(
-                              batch.map((kid) => loadComment(kid, depth + 1)),
+                              batch.map((kid: number) =>
+                                loadComment(kid, depth + 1)
+                              )
                             );
                           }
                         }
@@ -608,10 +610,10 @@ export default blink.agent({
                     ) {
                       const batch = (item.kids as number[]).slice(
                         i,
-                        i + batchSize,
+                        i + batchSize
                       );
                       await Promise.all(
-                        batch.map((kid) => loadComment(kid, 0)),
+                        batch.map((kid) => loadComment(kid, 0))
                       );
                     }
                   }
@@ -624,7 +626,7 @@ export default blink.agent({
                 } catch {
                   return null;
                 }
-              }),
+              })
             );
 
             const compact = stories.filter(Boolean);
@@ -650,7 +652,7 @@ Return ${format} format.`;
                   output: parsed,
                   cache_stats: {
                     items_cached: ids.filter((id) =>
-                      itemCache.get(`item-${id}`),
+                      itemCache.get(`item-${id}`)
                     ).length,
                     top_stories_cached: !!topStoriesCache.get("top-stories"),
                   },
@@ -662,7 +664,7 @@ Return ${format} format.`;
                   output_raw: text,
                   cache_stats: {
                     items_cached: ids.filter((id) =>
-                      itemCache.get(`item-${id}`),
+                      itemCache.get(`item-${id}`)
                     ).length,
                     top_stories_cached: !!topStoriesCache.get("top-stories"),
                   },
