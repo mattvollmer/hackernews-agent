@@ -118,7 +118,7 @@ export default blink.agent({
       system: `You can fetch Hacker News top stories via tools and write brief summaries.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
-- Prefer readable article body extracted via lightweight text extraction when available.
+- Only fetch full article content when explicitly asked.
 - Fetch and summarize the top 10 by default.
 - To fetch a full story with comments, use fetch_hn_item_details.
 - For TLDR bullets and sentiment across stories, use summarize_hn_tldr.`,
@@ -129,11 +129,18 @@ export default blink.agent({
         }),
         fetch_hn_top_articles: tool({
           description:
-            "Fetch top N HN stories and extract best-effort readable article text. Includes points, comment count, and time ago.",
+            "Fetch top N HN stories and (optionally) extract readable article text. Includes points, comment count, and time ago.",
           inputSchema: z.object({
             limit: z.number().int().min(1).max(30).default(10),
+            include_article: z.boolean().default(false),
+            max_content_chars: z
+              .number()
+              .int()
+              .min(200)
+              .max(20000)
+              .default(1200),
           }),
-          execute: async ({ limit }) => {
+          execute: async ({ limit, include_article, max_content_chars }) => {
             const topIds: number[] = await fetch(
               "https://hacker-news.firebaseio.com/v0/topstories.json",
             ).then((r) => r.json());
@@ -155,20 +162,26 @@ export default blink.agent({
                     time_ago: timeAgo(item?.time ?? null),
                     url: (item?.url as string | undefined) || null,
                     type: (item?.type as string | null) ?? null,
-                    text: (item?.text as string | undefined) || null,
+                    text: stripHtml(item?.text as string | undefined) || null,
                     comments_count:
                       (item?.descendants as number | null) ?? null,
                     comments_url: item?.id
                       ? `https://news.ycombinator.com/item?id=${item.id}`
                       : null,
-                  };
+                  } as const;
 
                   if (!item?.url) {
                     return {
                       ...base,
-                      content: stripHtml(base.text),
+                      content: base.text
+                        ? base.text.slice(0, max_content_chars)
+                        : null,
                       source: "hn" as const,
                     };
+                  }
+
+                  if (!include_article) {
+                    return { ...base, content: null, source: "url" as const };
                   }
 
                   try {
@@ -180,7 +193,13 @@ export default blink.agent({
                     });
                     const html = await res.text();
                     const content = extractArticleText(html);
-                    return { ...base, content, source: "url" as const };
+                    return {
+                      ...base,
+                      content: content
+                        ? content.slice(0, max_content_chars)
+                        : null,
+                      source: "url" as const,
+                    };
                   } catch {
                     return { ...base, content: null, source: "error" as const };
                   }
