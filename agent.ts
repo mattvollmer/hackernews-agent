@@ -544,8 +544,8 @@ Return ${format} format.`;
           // Create a Slack client to add the reaction
           const metadata = {
             teamId: body.team_id,
-            channelId: body.event.channel,
-            messageTs: body.event.ts
+            channel: body.event.channel,
+            ts: body.event.ts
           };
           const client = await slackbot.createClient(metadata, {});
           
