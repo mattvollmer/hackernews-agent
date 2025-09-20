@@ -1,0 +1,12 @@
+{
+  "name": "slack",
+  "main": "agent.ts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "ai": "^5.0.47",
+    "blink": "^0.1.32",
+    "esbuild": "^0.25.10",
+    "zod": "^4.1.9"
+  }
+}
