@@ -121,6 +121,7 @@ export default blink.agent({
 - If a story has no URL (e.g., Ask HN), use the HN text field.
 - Only fetch full article content when explicitly asked.
 - To fetch a full story with comments, use fetch_hn_item_details.
+- NEVER include emojies in your messages.
 - For TLDR bullets and sentiment across stories, use summarize_hn_tldr and include links, upvotes, and comment counts.`,
       messages: convertToModelMessages(messages),
       tools: {
