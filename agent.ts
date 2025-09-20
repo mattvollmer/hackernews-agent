@@ -122,11 +122,46 @@ export default blink.agent({
 - Only fetch full article content when explicitly asked.
 - To fetch a full story with comments, use fetch_hn_item_details.
 - NEVER include emojies in your messages.
-- For TLDR bullets and sentiment across stories, use summarize_hn_tldr and include links, upvotes, and comment counts.`,
+- When chatting in Slack, ALWAYS first call slack_auto_react with reaction "eyes" to add an :eyes: reaction to the latest incoming message before doing anything else.`,
       messages: convertToModelMessages(messages),
       tools: {
         ...slackbot.tools({
           messages,
+        }),
+        slack_auto_react: tool({
+          description:
+            "Add a reaction to the latest Slack message in this thread. Defaults to :eyes: if no reaction is provided.",
+          inputSchema: z.object({
+            reaction: z
+              .string()
+              .describe("Slack emoji name, e.g. eyes or thumbsup")
+              .default("eyes"),
+            ts: z
+              .string()
+              .optional()
+              .describe(
+                "Timestamp of the message to react to; defaults to the latest message ts",
+              ),
+          }),
+          execute: async ({ reaction, ts }) => {
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              throw new Error(
+                "This chat isn't from Slack. Cannot react to message.",
+              );
+            }
+            const api = await slackbot.createClient(metadata, {});
+            const name =
+              reaction.startsWith(":") && reaction.endsWith(":")
+                ? reaction.slice(1, -1)
+                : reaction;
+            await api.reactions.add({
+              channel: metadata.channel,
+              timestamp: ts ?? metadata.ts,
+              name,
+            });
+            return { success: true } as const;
+          },
         }),
         fetch_hn_top_articles: tool({
           description:
@@ -143,7 +178,7 @@ export default blink.agent({
           }),
           execute: async ({ limit, include_article, max_content_chars }) => {
             const topIds: number[] = await fetch(
-              "https://hacker-news.firebaseio.com/v0/topstories.json"
+              "https://hacker-news.firebaseio.com/v0/topstories.json",
             ).then((r) => r.json());
             const ids = (topIds || []).slice(0, limit);
 
@@ -151,7 +186,7 @@ export default blink.agent({
               ids.map(async (id) => {
                 try {
                   const item = await fetch(
-                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`
+                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
                   ).then((r) => r.json());
 
                   const base = {
@@ -221,7 +256,7 @@ export default blink.agent({
                     source: "error" as const,
                   };
                 }
-              })
+              }),
             );
 
             return { items };
@@ -249,7 +284,7 @@ export default blink.agent({
           }) => {
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
               ).then((r) => r.json());
 
             const item = await loadItem(id);
@@ -297,7 +332,7 @@ export default blink.agent({
               let remaining = max_comments;
               const loadComment = async (
                 cid: number,
-                depth: number
+                depth: number,
               ): Promise<any | null> => {
                 if (remaining <= 0) return null;
                 try {
@@ -309,7 +344,7 @@ export default blink.agent({
                     by: c.by ?? null,
                     time: c.time ?? null,
                     time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : c.text ?? null,
+                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
                     parent: c.parent ?? null,
                     dead: !!c.dead,
                     deleted: !!c.deleted,
@@ -387,13 +422,13 @@ export default blink.agent({
 
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
               ).then((r) => r.json());
 
             let ids: number[] = story_ids ?? [];
             if (!ids.length) {
               const topIds: number[] = await fetch(
-                "https://hacker-news.firebaseio.com/v0/topstories.json"
+                "https://hacker-news.firebaseio.com/v0/topstories.json",
               ).then((r) => r.json());
               ids = (topIds || []).slice(0, limit);
             }
@@ -447,7 +482,7 @@ export default blink.agent({
                     let remaining = max_comments;
                     const loadComment = async (
                       cid: number,
-                      depth: number
+                      depth: number,
                     ): Promise<void> => {
                       if (remaining <= 0) return;
                       try {
@@ -487,7 +522,7 @@ export default blink.agent({
                 } catch {
                   return null;
                 }
-              })
+              }),
             );
 
             const compact = stories.filter(Boolean);
