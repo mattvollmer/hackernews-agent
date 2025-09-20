@@ -1,8 +1,7 @@
 import { convertToModelMessages, streamText, tool, generateText } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
-import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
+import { parse } from "node-html-parser";
 
 const timeAgo = (unixSeconds: number | null) => {
   if (!unixSeconds || typeof unixSeconds !== "number") return null;
@@ -26,15 +25,72 @@ const timeAgo = (unixSeconds: number | null) => {
 const stripHtml = (html: string | null | undefined) => {
   if (!html) return null;
   try {
-    const dom = new JSDOM(`<!doctype html><body>${html}</body>`);
-    return (
-      dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() || null
-    );
+    const root = parse(html);
+    return root.textContent?.replace(/\s+/g, " ").trim() || null;
   } catch {
     return html
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+};
+
+// Simple readability-like text extraction
+const extractArticleText = (html: string): string | null => {
+  if (!html) return null;
+  
+  try {
+    const root = parse(html);
+    
+    // Remove unwanted elements
+    const unwantedSelectors = [
+      'script', 'style', 'nav', 'header', 'footer', 
+      '.ad', '.advertisement', '.sidebar', '.menu',
+      '.social', '.share', '.comments', '.related'
+    ];
+    
+    unwantedSelectors.forEach(selector => {
+      root.querySelectorAll(selector).forEach(el => el.remove());
+    });
+    
+    // Look for main content containers
+    const contentSelectors = [
+      'article', '[role="main"]', 'main', '.content', 
+      '.post', '.entry', '.article', '#content', 
+      '.post-content', '.entry-content'
+    ];
+    
+    for (const selector of contentSelectors) {
+      const content = root.querySelector(selector);
+      if (content) {
+        const text = content.textContent?.trim();
+        if (text && text.length > 100) {
+          return text.replace(/\s+/g, " ");
+        }
+      }
+    }
+    
+    // Fallback: find paragraphs and combine them
+    const paragraphs = root.querySelectorAll('p');
+    const textParts: string[] = [];
+    
+    paragraphs.forEach(p => {
+      const text = p.textContent?.trim();
+      if (text && text.length > 20) {
+        textParts.push(text);
+      }
+    });
+    
+    if (textParts.length > 0) {
+      return textParts.join(" ").replace(/\s+/g, " ");
+    }
+    
+    // Final fallback: get all text
+    const allText = root.textContent?.trim();
+    return allText && allText.length > 50 ? allText.replace(/\s+/g, " ") : null;
+    
+  } catch {
+    return null;
   }
 };
 
@@ -45,7 +101,7 @@ export default blink.agent({
       system: `You can fetch Hacker News top stories via tools and write brief summaries.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
-- Prefer readable article body extracted via Readability when available.
+- Prefer readable article body extracted via lightweight text extraction when available.
 - Fetch and summarize the top 10 by default.
 - To fetch a full story with comments, use fetch_hn_item_details.
 - For TLDR bullets and sentiment across stories, use summarize_hn_tldr.`,
@@ -103,10 +159,7 @@ export default blink.agent({
                       },
                     });
                     const html = await res.text();
-                    const dom = new JSDOM(html, { url: item.url });
-                    const reader = new Readability(dom.window.document);
-                    const article = reader.parse();
-                    const content = article?.textContent?.trim() || null;
+                    const content = extractArticleText(html);
                     return { ...base, content, source: "url" as const };
                   } catch {
                     return { ...base, content: null, source: "error" as const };
@@ -189,10 +242,7 @@ export default blink.agent({
                   },
                 });
                 const html = await res.text();
-                const dom = new JSDOM(html, { url: item.url });
-                const reader = new Readability(dom.window.document);
-                const article = reader.parse();
-                article_content = article?.textContent?.trim() || null;
+                article_content = extractArticleText(html);
               } catch {
                 article_content = null;
               }
@@ -340,10 +390,7 @@ export default blink.agent({
                         },
                       });
                       const html = await res.text();
-                      const dom = new JSDOM(html, { url: item.url });
-                      const reader = new Readability(dom.window.document);
-                      const article = reader.parse();
-                      const text = article?.textContent?.trim() || null;
+                      const text = extractArticleText(html);
                       if (text)
                         article_excerpt = text.slice(0, max_article_chars);
                     } catch {
@@ -409,21 +456,14 @@ export default blink.agent({
 - Provide 2–3 bullet points summarizing what the story is about (based on title, article excerpt, or Ask HN text).
 - Provide overall sentiment and 2–3 bullets of feedback/themes observed in the comments sample.
 - Be neutral and factual; avoid speculation.
-Return ${format === "json" ? "compact JSON ONLY with fields: id, title, tldr_bullets (array), sentiment (short string), feedback_bullets (array)" : "markdown bullets grouped by story (start each story with the title as a plain line)"}.
-`;
+Return ${format} format.`;
 
-            const result = await generateText({
+            const { text } = await generateText({
               model: "anthropic/claude-sonnet-4",
               system: prompt,
-              messages: [
-                {
-                  role: "user",
-                  content: JSON.stringify({ stories: compact }, null, 2),
-                },
-              ],
+              prompt: JSON.stringify(compact, null, 2),
             });
 
-            const text = result.text || "";
             if (format === "json") {
               try {
                 const parsed = JSON.parse(text);
