@@ -7,7 +7,7 @@ import { Readability } from "@mozilla/readability";
 export default blink.agent({
   async sendMessages({ messages }) {
     return streamText({
-      model: "openai/gpt-oss-120b",
+      model: "anthropic/claude-sonnet-4",
       system: `You can fetch Hacker News top stories via tools and write brief summaries.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
@@ -23,7 +23,7 @@ export default blink.agent({
           }),
           execute: async ({ limit }) => {
             const topIds: number[] = await fetch(
-              "https://hacker-news.firebaseio.com/v0/topstories.json",
+              "https://hacker-news.firebaseio.com/v0/topstories.json"
             ).then((r) => r.json());
             const ids = (topIds || []).slice(0, limit);
 
@@ -31,7 +31,7 @@ export default blink.agent({
               ids.map(async (id) => {
                 try {
                   const item = await fetch(
-                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
+                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`
                   ).then((r) => r.json());
 
                   const base = {
@@ -83,7 +83,7 @@ export default blink.agent({
                     source: "error" as const,
                   };
                 }
-              }),
+              })
             );
 
             return { items };
