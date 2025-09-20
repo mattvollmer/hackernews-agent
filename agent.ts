@@ -1,5 +1,4 @@
-import { convertToModelMessages, streamText, generateText } from "ai";
-import { tool } from "blink";
+import { convertToModelMessages, streamText, tool, generateText } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
 import { parse } from "node-html-parser";
