@@ -116,12 +116,12 @@ export default blink.agent({
     return streamText({
       model: "anthropic/claude-sonnet-4",
       system: `You can fetch Hacker News top stories via tools and write brief summaries.
+- Always include links to stories or comments.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
 - Only fetch full article content when explicitly asked.
-- Fetch and summarize the top 10 by default.
 - To fetch a full story with comments, use fetch_hn_item_details.
-- For TLDR bullets and sentiment across stories, use summarize_hn_tldr.`,
+- For TLDR bullets and sentiment across stories, use summarize_hn_tldr and include links, upvotes, and comment counts.`,
       messages: convertToModelMessages(messages),
       tools: {
         ...slackbot.tools({
@@ -142,7 +142,7 @@ export default blink.agent({
           }),
           execute: async ({ limit, include_article, max_content_chars }) => {
             const topIds: number[] = await fetch(
-              "https://hacker-news.firebaseio.com/v0/topstories.json",
+              "https://hacker-news.firebaseio.com/v0/topstories.json"
             ).then((r) => r.json());
             const ids = (topIds || []).slice(0, limit);
 
@@ -150,7 +150,7 @@ export default blink.agent({
               ids.map(async (id) => {
                 try {
                   const item = await fetch(
-                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
+                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`
                   ).then((r) => r.json());
 
                   const base = {
@@ -220,7 +220,7 @@ export default blink.agent({
                     source: "error" as const,
                   };
                 }
-              }),
+              })
             );
 
             return { items };
@@ -248,7 +248,7 @@ export default blink.agent({
           }) => {
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
               ).then((r) => r.json());
 
             const item = await loadItem(id);
@@ -296,7 +296,7 @@ export default blink.agent({
               let remaining = max_comments;
               const loadComment = async (
                 cid: number,
-                depth: number,
+                depth: number
               ): Promise<any | null> => {
                 if (remaining <= 0) return null;
                 try {
@@ -308,7 +308,7 @@ export default blink.agent({
                     by: c.by ?? null,
                     time: c.time ?? null,
                     time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
+                    text: strip_html ? stripHtml(c.text) : c.text ?? null,
                     parent: c.parent ?? null,
                     dead: !!c.dead,
                     deleted: !!c.deleted,
@@ -357,17 +357,17 @@ export default blink.agent({
             "Create TLDR bullet points for stories and summarize overall sentiment/feedback based on comments.",
           inputSchema: z.object({
             story_ids: z.array(z.number().int()).optional(),
-            limit: z.number().int().min(1).max(30).default(10),
+            limit: z.number().int().min(1).max(30).default(3),
             include_article: z.boolean().default(true),
-            include_comments: z.boolean().default(true),
+            include_comments: z.boolean().default(false),
             max_depth: z.number().int().min(0).max(3).default(1),
-            max_comments: z.number().int().min(1).max(100).default(25),
+            max_comments: z.number().int().min(1).max(100).default(10),
             max_article_chars: z
               .number()
               .int()
               .min(200)
-              .max(20000)
-              .default(4000),
+              .max(2000)
+              .default(2000),
             max_comment_chars: z.number().int().min(50).max(2000).default(500),
             format: z.enum(["markdown", "json"]).default("markdown"),
           }),
@@ -386,13 +386,13 @@ export default blink.agent({
 
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
               ).then((r) => r.json());
 
             let ids: number[] = story_ids ?? [];
             if (!ids.length) {
               const topIds: number[] = await fetch(
-                "https://hacker-news.firebaseio.com/v0/topstories.json",
+                "https://hacker-news.firebaseio.com/v0/topstories.json"
               ).then((r) => r.json());
               ids = (topIds || []).slice(0, limit);
             }
@@ -446,7 +446,7 @@ export default blink.agent({
                     let remaining = max_comments;
                     const loadComment = async (
                       cid: number,
-                      depth: number,
+                      depth: number
                     ): Promise<void> => {
                       if (remaining <= 0) return;
                       try {
@@ -486,13 +486,14 @@ export default blink.agent({
                 } catch {
                   return null;
                 }
-              }),
+              })
             );
 
             const compact = stories.filter(Boolean);
 
             const prompt = `You are generating concise TLDRs for Hacker News items. For each story:
-- Provide 2–3 bullet points summarizing what the story is about (based on title, article excerpt, or Ask HN text).
+- Include links, points, comment count, and time ago.
+            - Provide 2–3 bullet points summarizing what the story is about (based on title, article excerpt, or Ask HN text).
 - Provide overall sentiment and 2–3 bullets of feedback/themes observed in the comments sample.
 - Be neutral and factual; avoid speculation.
 Return ${format} format.`;
