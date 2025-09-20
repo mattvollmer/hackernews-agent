@@ -4,11 +4,11 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@blink-sdk/slackbot": "^0.0.2",
     "ai": "^5.0.47",
     "blink": "^0.1.32",
     "esbuild": "^0.25.10",
-    "zod": "^4.1.9",
-    "node-html-parser": "^6.1.13"
-  },
-  "devDependencies": {}
+    "node-html-parser": "^6.1.13",
+    "zod": "^4.1.9"
+  }
 }

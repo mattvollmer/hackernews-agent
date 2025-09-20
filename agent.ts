@@ -2,6 +2,7 @@ import { convertToModelMessages, streamText, tool, generateText } from "ai";
 import * as blink from "blink";
 import { z } from "zod";
 import { parse } from "node-html-parser";
+import * as slackbot from "@blink-sdk/slackbot";
 
 const timeAgo = (unixSeconds: number | null) => {
   if (!unixSeconds || typeof unixSeconds !== "number") return null;
@@ -38,28 +39,45 @@ const stripHtml = (html: string | null | undefined) => {
 // Simple readability-like text extraction
 const extractArticleText = (html: string): string | null => {
   if (!html) return null;
-  
+
   try {
     const root = parse(html);
-    
+
     // Remove unwanted elements
     const unwantedSelectors = [
-      'script', 'style', 'nav', 'header', 'footer', 
-      '.ad', '.advertisement', '.sidebar', '.menu',
-      '.social', '.share', '.comments', '.related'
+      "script",
+      "style",
+      "nav",
+      "header",
+      "footer",
+      ".ad",
+      ".advertisement",
+      ".sidebar",
+      ".menu",
+      ".social",
+      ".share",
+      ".comments",
+      ".related",
     ];
-    
-    unwantedSelectors.forEach(selector => {
-      root.querySelectorAll(selector).forEach(el => el.remove());
+
+    unwantedSelectors.forEach((selector) => {
+      root.querySelectorAll(selector).forEach((el) => el.remove());
     });
-    
+
     // Look for main content containers
     const contentSelectors = [
-      'article', '[role="main"]', 'main', '.content', 
-      '.post', '.entry', '.article', '#content', 
-      '.post-content', '.entry-content'
+      "article",
+      '[role="main"]',
+      "main",
+      ".content",
+      ".post",
+      ".entry",
+      ".article",
+      "#content",
+      ".post-content",
+      ".entry-content",
     ];
-    
+
     for (const selector of contentSelectors) {
       const content = root.querySelector(selector);
       if (content) {
@@ -69,26 +87,25 @@ const extractArticleText = (html: string): string | null => {
         }
       }
     }
-    
+
     // Fallback: find paragraphs and combine them
-    const paragraphs = root.querySelectorAll('p');
+    const paragraphs = root.querySelectorAll("p");
     const textParts: string[] = [];
-    
-    paragraphs.forEach(p => {
+
+    paragraphs.forEach((p) => {
       const text = p.textContent?.trim();
       if (text && text.length > 20) {
         textParts.push(text);
       }
     });
-    
+
     if (textParts.length > 0) {
       return textParts.join(" ").replace(/\s+/g, " ");
     }
-    
+
     // Final fallback: get all text
     const allText = root.textContent?.trim();
     return allText && allText.length > 50 ? allText.replace(/\s+/g, " ") : null;
-    
   } catch {
     return null;
   }
@@ -107,6 +124,9 @@ export default blink.agent({
 - For TLDR bullets and sentiment across stories, use summarize_hn_tldr.`,
       messages: convertToModelMessages(messages),
       tools: {
+        ...slackbot.tools({
+          messages,
+        }),
         fetch_hn_top_articles: tool({
           description:
             "Fetch top N HN stories and extract best-effort readable article text. Includes points, comment count, and time ago.",
@@ -485,5 +505,13 @@ Return ${format} format.`;
         }),
       },
     });
+  },
+  async webhook(request) {
+    if (slackbot.isOAuthRequest(request)) {
+      return slackbot.handleOAuthRequest(request);
+    }
+    if (slackbot.isWebhook(request)) {
+      return slackbot.handleWebhook(request);
+    }
   },
 });
