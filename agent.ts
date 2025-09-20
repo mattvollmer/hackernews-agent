@@ -532,6 +532,25 @@ Return ${format} format.`;
       return slackbot.handleOAuthRequest(request);
     }
     if (slackbot.isWebhook(request)) {
+      // Parse the request body to handle message events
+      const body = await request.json();
+      
+      // Automatically react to new messages with an emoji
+      if (body.event?.type === 'message' && 
+          !body.event.bot_id && 
+          !body.event.subtype && 
+          body.event.text) {
+        try {
+          await slackbot.slackbot_react_to_message({
+            channel: body.event.channel,
+            timestamp: body.event.ts,
+            name: 'eyes' // React with eyes emoji
+          });
+        } catch (error) {
+          console.error('Failed to add emoji reaction:', error);
+        }
+      }
+      
       return slackbot.handleWebhook(request);
     }
   },
