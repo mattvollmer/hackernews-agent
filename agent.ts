@@ -541,7 +541,15 @@ Return ${format} format.`;
           !body.event.subtype && 
           body.event.text) {
         try {
-          await slackbot.slackbot_react_to_message({
+          // Create a Slack client to add the reaction
+          const metadata = {
+            teamId: body.team_id,
+            channelId: body.event.channel,
+            messageTs: body.event.ts
+          };
+          const client = await slackbot.createClient(metadata, {});
+          
+          await client.reactions.add({
             channel: body.event.channel,
             timestamp: body.event.ts,
             name: 'eyes' // React with eyes emoji
