@@ -3,6 +3,11 @@ import * as blink from "blink";
 import { z } from "zod";
 import { parse } from "node-html-parser";
 import * as slackbot from "@blink-sdk/slackbot";
+import {
+  createSlackApp,
+  createMessageEventHandler,
+} from "@blink-sdk/slackbot/webhook";
+import { registerIfStale } from "./heartbeat";
 
 const timeAgo = (unixSeconds: number | null) => {
   if (!unixSeconds || typeof unixSeconds !== "number") return null;
@@ -225,7 +230,7 @@ When chatting in Slack channels:
             });
             if (!result.messages?.[0]) {
               throw new Error(
-                "Message not found! Ensure the timestamp is formatted as a float."
+                "Message not found! Ensure the timestamp is formatted as a float.",
               );
             }
             return {
@@ -270,7 +275,7 @@ When chatting in Slack channels:
           }),
           execute: async ({ limit, include_article, max_content_chars }) => {
             const topIds: number[] = await fetch(
-              "https://hacker-news.firebaseio.com/v0/topstories.json"
+              "https://hacker-news.firebaseio.com/v0/topstories.json",
             ).then((r) => r.json());
             const ids = (topIds || []).slice(0, limit);
 
@@ -278,7 +283,7 @@ When chatting in Slack channels:
               ids.map(async (id) => {
                 try {
                   const item = await fetch(
-                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`
+                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
                   ).then((r) => r.json());
 
                   const base = {
@@ -348,7 +353,7 @@ When chatting in Slack channels:
                     source: "error" as const,
                   };
                 }
-              })
+              }),
             );
 
             return { items };
@@ -376,7 +381,7 @@ When chatting in Slack channels:
           }) => {
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
               ).then((r) => r.json());
 
             const item = await loadItem(id);
@@ -424,7 +429,7 @@ When chatting in Slack channels:
               let remaining = max_comments;
               const loadComment = async (
                 cid: number,
-                depth: number
+                depth: number,
               ): Promise<any | null> => {
                 if (remaining <= 0) return null;
                 try {
@@ -436,7 +441,7 @@ When chatting in Slack channels:
                     by: c.by ?? null,
                     time: c.time ?? null,
                     time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : c.text ?? null,
+                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
                     parent: c.parent ?? null,
                     dead: !!c.dead,
                     deleted: !!c.deleted,
@@ -514,13 +519,13 @@ When chatting in Slack channels:
 
             const loadItem = async (itemId: number) =>
               fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
+                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`,
               ).then((r) => r.json());
 
             let ids: number[] = story_ids ?? [];
             if (!ids.length) {
               const topIds: number[] = await fetch(
-                "https://hacker-news.firebaseio.com/v0/topstories.json"
+                "https://hacker-news.firebaseio.com/v0/topstories.json",
               ).then((r) => r.json());
               ids = (topIds || []).slice(0, limit);
             }
@@ -574,7 +579,7 @@ When chatting in Slack channels:
                     let remaining = max_comments;
                     const loadComment = async (
                       cid: number,
-                      depth: number
+                      depth: number,
                     ): Promise<void> => {
                       if (remaining <= 0) return;
                       try {
@@ -614,7 +619,7 @@ When chatting in Slack channels:
                 } catch {
                   return null;
                 }
-              })
+              }),
             );
 
             const compact = stories.filter(Boolean);
@@ -659,7 +664,60 @@ Return ${format} format.`;
       return slackbot.handleOAuthRequest(request);
     }
     if (slackbot.isWebhook(request)) {
-      return slackbot.handleWebhook(request);
+      const app = createSlackApp();
+
+      // Quiet heartbeat on app home open
+      app.event("app_home_opened", async (event) => {
+        const teamId = event.context.teamId!;
+        const botId = event.context.botUserId!;
+        await registerIfStale(teamId, botId, {
+          agent_name: "Hacker News Agent",
+          summary:
+            "Summarizes Hacker News top stories and items; can fetch details, articles, and generate TLDRs.",
+          skills: [
+            "hacker_news",
+            "hn_top_stories",
+            "hn_item_details",
+            "summarization",
+            "tldr",
+          ],
+          examples: [
+            "summarize the top 5 Hacker News stories",
+            "get details for HN item 12345",
+            "TLDR for today's top HN posts",
+          ],
+        });
+      });
+
+      // Heartbeat when mentioned
+      app.event("message", async (event) => {
+        const { payload, context } = event;
+        if (payload.subtype !== undefined) return;
+        const mentioned = payload.text.includes(`<@${context.botUserId}>`);
+        if (!mentioned) return;
+        await registerIfStale(context.teamId!, context.botUserId!, {
+          agent_name: "Hacker News Agent",
+          summary:
+            "Summarizes Hacker News top stories and items; can fetch details, articles, and generate TLDRs.",
+          skills: [
+            "hacker_news",
+            "hn_top_stories",
+            "hn_item_details",
+            "summarization",
+            "tldr",
+          ],
+          examples: [
+            "summarize the top 5 Hacker News stories",
+            "get details for HN item 12345",
+            "TLDR for today's top HN posts",
+          ],
+        });
+      });
+
+      // Preserve default behavior for responding on mentions
+      app.event("message", createMessageEventHandler());
+
+      return app.run(request);
     }
   },
 });
