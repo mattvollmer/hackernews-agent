@@ -171,6 +171,7 @@ When chatting in Slack channels:
 - Your responses use GitHub-flavored Markdown rendered with CommonMark specification
 - Code blocks must be rendered with \`\`\` and the language name
 - Use standard markdown conventions for links: [text](url)
+- Use bullet points or numbered lists for clarity
 - Mermaid diagrams can be used for visualization when helpful`;
   }
 };
