@@ -740,6 +740,11 @@ Return ${format} format.`;
       // Also respond to app_mention directly
       app.event("app_mention", createMessageEventHandler() as any);
 
+      // Silence noisy membership events to avoid 'No listener found' logs
+      const silent = async () => {};
+      app.event("member_joined_channel", silent as any);
+      app.event("member_left_channel", silent as any);
+
       return app.run(request);
     }
   },
