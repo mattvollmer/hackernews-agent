@@ -115,7 +115,7 @@ export default blink.agent({
   async sendMessages({ messages }) {
     return streamText({
       model: "anthropic/claude-sonnet-4",
-      system: `You can fetch Hacker News top stories via tools and write brief summaries.
+      system: `Your name is Hacker Tracker. You can fetch Hacker News top stories via tools and write brief summaries.
 - Always include links to stories or comments.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
