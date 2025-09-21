@@ -123,19 +123,39 @@ export default blink.agent({
 - To fetch a full story with comments, use fetch_hn_item_details.
 - NEVER include emojies in your messages.
 - You can read Slack messages, threads, and user info using the slackbot_read_* tools.
-- When chatting in Slack, ALWAYS first call slackbot_react_to_message with reaction "thinking_face" to add an :thinking_face: reaction to the latest incoming message before doing anything else. ALWAYS remove the emoji after you send your response by calling slackbot_react_to_message with reaction "thinking_face" and remove_reaction: true.`,
+## Slack-Specific Behavior:
+When chatting in Slack channels:
+
+### Interaction Protocol:
+- ALWAYS first call slackbot_react_to_message with reaction "thinking_face" to add an :thinking_face: reaction to the latest incoming message before doing anything else
+- ALWAYS remove the emoji after you send your response by calling slackbot_react_to_message with reaction "thinking_face" and remove_reaction: true
+
+### Communication Style:
+- Keep responses concise and to the point to respect users' time
+- Aim for clarity and brevity over comprehensive explanations
+- Use bullet points or numbered lists for easy reading when listing items
+- Never include emojis in responses unless explicitly asked to do so
+
+### Formatting Guidelines:
+- ALWAYS format URLs as clickable links using the <url|text> format
+- Don't include markdown headings (#, ##, etc); use *bold text* instead
+- Use standard Slack formatting conventions`,
       messages: convertToModelMessages(messages),
       tools: {
         ...slackbot.tools({
           messages,
         }),
-        
+
         slackbot_read_messages: tool({
-          description: "Read messages from channels by ID. Messages with 'thread_ts' have replies that can be read.",
+          description:
+            "Read messages from channels by ID. Messages with 'thread_ts' have replies that can be read.",
           inputSchema: z.object({
             channel: z.string().describe("The channel to read messages from."),
             limit: z.number().describe("The number of messages to read."),
-            cursor: z.string().optional().describe("The cursor to use to paginate through the messages."),
+            cursor: z
+              .string()
+              .optional()
+              .describe("The cursor to use to paginate through the messages."),
           }),
           execute: async ({ channel, limit, cursor }) => {
             const metadata = slackbot.findLastMessageMetadata(messages);
@@ -161,7 +181,10 @@ export default blink.agent({
             channel: z.string().describe("The channel to read messages from."),
             thread_ts: z.string().describe("The thread to read replies from."),
             limit: z.number().describe("The number of replies to read."),
-            cursor: z.string().optional().describe("The cursor to use to paginate through the replies."),
+            cursor: z
+              .string()
+              .optional()
+              .describe("The cursor to use to paginate through the replies."),
           }),
           execute: async ({ channel, thread_ts, limit, cursor }) => {
             const metadata = slackbot.findLastMessageMetadata(messages);
@@ -201,7 +224,9 @@ export default blink.agent({
               inclusive: true,
             });
             if (!result.messages?.[0]) {
-              throw new Error("Message not found! Ensure the timestamp is formatted as a float.");
+              throw new Error(
+                "Message not found! Ensure the timestamp is formatted as a float."
+              );
             }
             return {
               message: result.messages[0],
@@ -229,7 +254,7 @@ export default blink.agent({
             };
           },
         }),
-        
+
         fetch_hn_top_articles: tool({
           description:
             "Fetch top N HN stories and (optionally) extract readable article text. Includes points, comment count, and time ago.",
