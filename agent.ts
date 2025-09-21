@@ -111,18 +111,24 @@ const extractArticleText = (html: string): string | null => {
   }
 };
 
-export default blink.agent({
-  async sendMessages({ messages }) {
-    return streamText({
-      model: "anthropic/claude-sonnet-4",
-      system: `Your name is Hacker Tracker. You can fetch Hacker News top stories via tools and write brief summaries.
+// Platform detection and prompt generation
+const detectPlatform = (messages: any[]) => {
+  return slackbot.findLastMessageMetadata(messages) ? 'slack' : 'web';
+};
+
+const createSystemPrompt = (platform: 'slack' | 'web') => {
+  const basePrompt = `Your name is Hacker Tracker. You can fetch Hacker News top stories via tools and write brief summaries.
 - Always include links to stories or comments.
 - Keep each summary to 2–3 sentences.
 - If a story has no URL (e.g., Ask HN), use the HN text field.
 - Only fetch full article content when explicitly asked.
 - To fetch a full story with comments, use fetch_hn_item_details.
 - NEVER include emojies in your messages.
-- You can read Slack messages, threads, and user info using the slackbot_read_* tools.
+- You can read Slack messages, threads, and user info using the slackbot_read_* tools.`;
+
+  if (platform === 'slack') {
+    return `${basePrompt}
+
 ## Slack-Specific Behavior:
 When chatting in Slack channels:
 
@@ -135,11 +141,49 @@ When chatting in Slack channels:
 - Aim for clarity and brevity over comprehensive explanations
 - Use bullet points or numbered lists for easy reading when listing items
 - Never include emojis in responses unless explicitly asked to do so
+- Prefer short responses with maximum 2,900 characters
 
-### Formatting Guidelines:
-- ALWAYS format URLs as clickable links using the <url|text> format
-- Don't include markdown headings (#, ##, etc); use *bold text* instead
-- Use standard Slack formatting conventions`,
+### Slack Formatting Rules:
+- *text* = bold (NOT italics like in standard markdown)
+- _text_ = italics  
+- \`text\` = inline code
+- \`\`\` = code blocks (do NOT put a language after the backticks)
+- ~text~ = strikethrough
+- <http://example.com|link text> = links
+- tables must be in a code block
+- user mentions must be in the format <@user_id> (e.g. <@U01UBAM2C4D>)
+
+### Never Use in Slack:
+- Headings (#, ##, ###, etc.)
+- Double asterisks (**text**) - Slack doesn't support this
+- Standard markdown bold/italic conventions`;
+  } else {
+    return `${basePrompt}
+
+## Web Chat Behavior:
+
+### Communication Style:
+- Provide comprehensive explanations when helpful
+- Use structured formatting to organize information clearly
+- Include detailed context when discussing technical topics
+
+### Web Formatting Rules:
+- Your responses use GitHub-flavored Markdown rendered with CommonMark specification
+- Never use headings (# ## ###), bold text (**text**), or other markdown formatting unless explicitly requested
+- Code blocks must be rendered with \`\`\` and the language name
+- Use standard markdown conventions for links: [text](url)
+- Mermaid diagrams can be used for visualization when helpful`;
+  }
+};
+
+export default blink.agent({
+  async sendMessages({ messages }) {
+    const platform = detectPlatform(messages);
+    const systemPrompt = createSystemPrompt(platform);
+    
+    return streamText({
+      model: "anthropic/claude-sonnet-4",
+      system: systemPrompt,
       messages: convertToModelMessages(messages),
       tools: {
         ...slackbot.tools({
