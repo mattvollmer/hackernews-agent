@@ -33,11 +33,26 @@ export async function registerIfStale(
     ...manifest,
   };
 
-  await fetch(url, {
+  // Normalize to base webhook path: strip trailing /registry if present
+  let target = url;
+  try {
+    const u = new URL(url);
+    if (u.pathname.endsWith("/registry")) {
+      u.pathname = u.pathname.replace(/\/registry\/?$/, "");
+      target = u.toString();
+    }
+  } catch {
+    if (url.endsWith("/registry")) {
+      target = url.replace(/\/registry\/?$/, "");
+    }
+  }
+
+  await fetch(target, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${token}`,
+      "x-conductor-registry": "1",
     },
     body: JSON.stringify(body),
   });
