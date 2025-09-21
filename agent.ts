@@ -113,10 +113,10 @@ const extractArticleText = (html: string): string | null => {
 
 // Platform detection and prompt generation
 const detectPlatform = (messages: any[]) => {
-  return slackbot.findLastMessageMetadata(messages) ? 'slack' : 'web';
+  return slackbot.findLastMessageMetadata(messages) ? "slack" : "web";
 };
 
-const createSystemPrompt = (platform: 'slack' | 'web') => {
+const createSystemPrompt = (platform: "slack" | "web") => {
   const basePrompt = `Your name is Hacker Tracker. You can fetch Hacker News top stories via tools and write brief summaries.
 - Always include links to stories or comments.
 - Keep each summary to 2–3 sentences.
@@ -126,7 +126,7 @@ const createSystemPrompt = (platform: 'slack' | 'web') => {
 - NEVER include emojies in your messages.
 - You can read Slack messages, threads, and user info using the slackbot_read_* tools.`;
 
-  if (platform === 'slack') {
+  if (platform === "slack") {
     return `${basePrompt}
 
 ## Slack-Specific Behavior:
@@ -169,7 +169,6 @@ When chatting in Slack channels:
 
 ### Web Formatting Rules:
 - Your responses use GitHub-flavored Markdown rendered with CommonMark specification
-- Never use headings (# ## ###), bold text (**text**), or other markdown formatting unless explicitly requested
 - Code blocks must be rendered with \`\`\` and the language name
 - Use standard markdown conventions for links: [text](url)
 - Mermaid diagrams can be used for visualization when helpful`;
@@ -180,7 +179,7 @@ export default blink.agent({
   async sendMessages({ messages }) {
     const platform = detectPlatform(messages);
     const systemPrompt = createSystemPrompt(platform);
-    
+
     return streamText({
       model: "anthropic/claude-sonnet-4",
       system: systemPrompt,
