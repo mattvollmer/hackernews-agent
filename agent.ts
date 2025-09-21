@@ -122,12 +122,114 @@ export default blink.agent({
 - Only fetch full article content when explicitly asked.
 - To fetch a full story with comments, use fetch_hn_item_details.
 - NEVER include emojies in your messages.
-- When chatting in Slack, ALWAYS first call slack_auto_react with reaction "thinking_face" to add an :thinking_face: reaction to the latest incoming message before doing anything else. ALWAYS remove the emoji after you send your response by calling slack_auto_react with reaction "remove".`,
+- You can read Slack messages, threads, and user info using the slackbot_read_* tools.
+- When chatting in Slack, ALWAYS first call slackbot_react_to_message with reaction "thinking_face" to add an :thinking_face: reaction to the latest incoming message before doing anything else. ALWAYS remove the emoji after you send your response by calling slackbot_react_to_message with reaction "thinking_face" and remove_reaction: true.`,
       messages: convertToModelMessages(messages),
       tools: {
         ...slackbot.tools({
           messages,
         }),
+        
+        slackbot_read_messages: tool({
+          description: "Read messages from channels by ID. Messages with 'thread_ts' have replies that can be read.",
+          inputSchema: z.object({
+            channel: z.string().describe("The channel to read messages from."),
+            limit: z.number().describe("The number of messages to read."),
+            cursor: z.string().optional().describe("The cursor to use to paginate through the messages."),
+          }),
+          execute: async ({ channel, limit, cursor }) => {
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              throw new Error("This chat isn't from Slack!");
+            }
+            const api = await slackbot.createClient(metadata);
+            const result = await api.conversations.history({
+              channel,
+              limit,
+              cursor,
+            });
+            return {
+              messages: result.messages || [],
+              next_cursor: result.response_metadata?.next_cursor || "",
+            };
+          },
+        }),
+
+        slackbot_read_thread_replies: tool({
+          description: "Read replies to a thread.",
+          inputSchema: z.object({
+            channel: z.string().describe("The channel to read messages from."),
+            thread_ts: z.string().describe("The thread to read replies from."),
+            limit: z.number().describe("The number of replies to read."),
+            cursor: z.string().optional().describe("The cursor to use to paginate through the replies."),
+          }),
+          execute: async ({ channel, thread_ts, limit, cursor }) => {
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              throw new Error("This chat isn't from Slack!");
+            }
+            const api = await slackbot.createClient(metadata);
+            const result = await api.conversations.replies({
+              channel,
+              ts: thread_ts,
+              limit,
+              cursor,
+            });
+            return {
+              messages: result.messages || [],
+              next_cursor: result.response_metadata?.next_cursor || "",
+            };
+          },
+        }),
+
+        slackbot_read_message: tool({
+          description: "Read a specific message from a channel by timestamp.",
+          inputSchema: z.object({
+            channel: z.string().describe("The channel to read messages from."),
+            ts: z.string().describe("The timestamp of the message to read."),
+          }),
+          execute: async ({ channel, ts }) => {
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              throw new Error("This chat isn't from Slack!");
+            }
+            const api = await slackbot.createClient(metadata);
+            const result = await api.conversations.history({
+              channel,
+              latest: ts,
+              limit: 1,
+              inclusive: true,
+            });
+            if (!result.messages?.[0]) {
+              throw new Error("Message not found! Ensure the timestamp is formatted as a float.");
+            }
+            return {
+              message: result.messages[0],
+            };
+          },
+        }),
+
+        slackbot_read_user_info: tool({
+          description: "Read information about a user.",
+          inputSchema: z.object({
+            user: z.string().describe("The user to read information about."),
+          }),
+          execute: async ({ user }) => {
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              throw new Error("This chat isn't from Slack!");
+            }
+            const api = await slackbot.createClient(metadata);
+            const result = await api.users.info({ user });
+            if (!result.user) {
+              throw new Error("User not found!");
+            }
+            return {
+              user: result.user,
+            };
+          },
+        }),
+        
         fetch_hn_top_articles: tool({
           description:
             "Fetch top N HN stories and (optionally) extract readable article text. Includes points, comment count, and time ago.",
