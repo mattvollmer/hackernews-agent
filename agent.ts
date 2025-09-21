@@ -714,8 +714,31 @@ Return ${format} format.`;
         });
       });
 
+      // Heartbeat on app_mention as well (some workspaces only subscribe to app_mention)
+      app.event("app_mention", async (event: any) => {
+        await registerIfStale(event.context.teamId!, event.context.botUserId!, {
+          agent_name: "Hacker News Agent",
+          summary:
+            "Summarizes Hacker News top stories and items; can fetch details, articles, and generate TLDRs.",
+          skills: [
+            "hacker_news",
+            "hn_top_stories",
+            "hn_item_details",
+            "summarization",
+            "tldr",
+          ],
+          examples: [
+            "summarize the top 5 Hacker News stories",
+            "get details for HN item 12345",
+            "TLDR for today's top HN posts",
+          ],
+        });
+      });
+
       // Preserve default behavior for responding on mentions
       app.event("message", createMessageEventHandler());
+      // Also respond to app_mention directly
+      app.event("app_mention", createMessageEventHandler() as any);
 
       return app.run(request);
     }
