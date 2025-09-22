@@ -4,6 +4,132 @@ import { z } from "zod";
 import { parse } from "node-html-parser";
 import * as slackbot from "@blink-sdk/slackbot";
 
+const HN_API_BASE = "https://hacker-news.firebaseio.com/v0";
+
+type CacheEntry<T> = { value: T; expires: number };
+
+const nowMs = () => Date.now();
+
+const pMap = async <T, R>(
+  items: T[],
+  mapper: (t: T, i: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> => {
+  const ret: R[] = new Array(items.length);
+  let idx = 0;
+  let active = 0;
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      if (idx >= items.length && active === 0) return resolve(ret);
+      while (active < concurrency && idx < items.length) {
+        const i = idx++;
+        active++;
+        Promise.resolve(mapper(items[i], i))
+          .then((r) => {
+            ret[i] = r;
+            active--;
+            run();
+          })
+          .catch((e) => reject(e));
+      }
+    };
+    run();
+  });
+};
+
+class HackerNewsAPI {
+  private cache = new Map<string, CacheEntry<any>>();
+  private pending = new Map<string, Promise<any>>();
+  private ttlTopStories: number;
+  private ttlItem: number;
+  private concurrency: number;
+  private cleanupTimer: any;
+
+  constructor(opts?: {
+    ttlTopStoriesMs?: number;
+    ttlItemMs?: number;
+    concurrency?: number;
+  }) {
+    this.ttlTopStories = opts?.ttlTopStoriesMs ?? 2 * 60 * 1000;
+    this.ttlItem = opts?.ttlItemMs ?? 10 * 60 * 1000;
+    this.concurrency = Math.max(1, Math.min(32, opts?.concurrency ?? 12));
+    this.cleanupTimer = setInterval(() => this.cleanup(), 60 * 1000);
+    if (typeof this.cleanupTimer.unref === "function")
+      this.cleanupTimer.unref();
+  }
+
+  private getCached<T>(key: string): T | null {
+    const e = this.cache.get(key);
+    if (!e) return null;
+    if (e.expires < nowMs()) {
+      this.cache.delete(key);
+      return null;
+    }
+    return e.value as T;
+  }
+
+  private setCached<T>(key: string, value: T, ttlMs: number) {
+    this.cache.set(key, { value, expires: nowMs() + ttlMs });
+  }
+
+  private async dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const p = this.pending.get(key);
+    if (p) return p as Promise<T>;
+    const created = fn();
+    this.pending.set(key, created);
+    try {
+      const v = await created;
+      return v;
+    } finally {
+      this.pending.delete(key);
+    }
+  }
+
+  private async getJSON<T>(url: string): Promise<T> {
+    const res = await fetch(url);
+    return (await res.json()) as T;
+  }
+
+  async getTopStories(): Promise<number[]> {
+    const key = "topstories";
+    const cached = this.getCached<number[]>(key);
+    if (cached) return cached;
+    const val = await this.dedupe<number[]>(key, async () => {
+      const data = await this.getJSON<number[]>(
+        `${HN_API_BASE}/topstories.json`,
+      );
+      this.setCached(key, data, this.ttlTopStories);
+      return data;
+    });
+    return val;
+  }
+
+  async getItem(id: number): Promise<any> {
+    const key = `item:${id}`;
+    const cached = this.getCached<any>(key);
+    if (cached) return cached;
+    const val = await this.dedupe<any>(key, async () => {
+      const data = await this.getJSON<any>(`${HN_API_BASE}/item/${id}.json`);
+      this.setCached(key, data, this.ttlItem);
+      return data;
+    });
+    return val;
+  }
+
+  async getBatchItems(ids: number[]): Promise<any[]> {
+    return pMap(ids, (id) => this.getItem(id), this.concurrency);
+  }
+
+  private cleanup() {
+    const t = nowMs();
+    for (const [k, v] of this.cache) {
+      if (v.expires < t) this.cache.delete(k);
+    }
+  }
+}
+
+const hnApi = new HackerNewsAPI();
+
 const timeAgo = (unixSeconds: number | null) => {
   if (!unixSeconds || typeof unixSeconds !== "number") return null;
   const now = Math.floor(Date.now() / 1000);
@@ -33,6 +159,24 @@ const stripHtml = (html: string | null | undefined) => {
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+};
+
+const fetchWithTimeout = async (
+  url: string,
+  opts: any = {},
+  timeoutMs = 8000,
+): Promise<Response> => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...(opts || {}),
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(id);
   }
 };
 
@@ -269,7 +413,7 @@ export default blink.agent({
             });
             if (!result.messages?.[0]) {
               throw new Error(
-                "Message not found! Ensure the timestamp is formatted as a float."
+                "Message not found! Ensure the timestamp is formatted as a float.",
               );
             }
             return {
@@ -313,18 +457,14 @@ export default blink.agent({
               .default(1200),
           }),
           execute: async ({ limit, include_article, max_content_chars }) => {
-            const topIds: number[] = await fetch(
-              "https://hacker-news.firebaseio.com/v0/topstories.json"
-            ).then((r) => r.json());
-            const ids = (topIds || []).slice(0, limit);
+            const ids = (await hnApi.getTopStories()).slice(0, limit);
+            const rawItems = await hnApi.getBatchItems(ids);
 
-            const items = await Promise.all(
-              ids.map(async (id) => {
+            const items = await pMap(
+              ids,
+              async (id, i) => {
+                const item = rawItems[i];
                 try {
-                  const item = await fetch(
-                    `https://hacker-news.firebaseio.com/v0/item/${id}.json`
-                  ).then((r) => r.json());
-
                   const base = {
                     id: (item?.id as number | null) ?? null,
                     title: (item?.title as string | null) ?? null,
@@ -357,7 +497,7 @@ export default blink.agent({
                   }
 
                   try {
-                    const res = await fetch(item.url, {
+                    const res = await fetchWithTimeout(item.url, {
                       headers: {
                         "User-Agent":
                           "hn-summarizer/1.0 (+https://example.com)",
@@ -392,7 +532,8 @@ export default blink.agent({
                     source: "error" as const,
                   };
                 }
-              })
+              },
+              12,
             );
 
             return { items };
@@ -418,10 +559,7 @@ export default blink.agent({
             max_comments,
             strip_html,
           }) => {
-            const loadItem = async (itemId: number) =>
-              fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
-              ).then((r) => r.json());
+            const loadItem = async (itemId: number) => hnApi.getItem(itemId);
 
             const item = await loadItem(id);
             if (!item) return { error: "not_found", id } as const;
@@ -468,7 +606,7 @@ export default blink.agent({
               let remaining = max_comments;
               const loadComment = async (
                 cid: number,
-                depth: number
+                depth: number,
               ): Promise<any | null> => {
                 if (remaining <= 0) return null;
                 try {
@@ -480,7 +618,7 @@ export default blink.agent({
                     by: c.by ?? null,
                     time: c.time ?? null,
                     time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : c.text ?? null,
+                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
                     parent: c.parent ?? null,
                     dead: !!c.dead,
                     deleted: !!c.deleted,
@@ -556,23 +694,20 @@ export default blink.agent({
               format,
             } = args;
 
-            const loadItem = async (itemId: number) =>
-              fetch(
-                `https://hacker-news.firebaseio.com/v0/item/${itemId}.json`
-              ).then((r) => r.json());
+            const loadItem = async (itemId: number) => hnApi.getItem(itemId);
 
             let ids: number[] = story_ids ?? [];
             if (!ids.length) {
-              const topIds: number[] = await fetch(
-                "https://hacker-news.firebaseio.com/v0/topstories.json"
-              ).then((r) => r.json());
-              ids = (topIds || []).slice(0, limit);
+              ids = (await hnApi.getTopStories()).slice(0, limit);
             }
 
-            const stories = await Promise.all(
-              ids.map(async (id) => {
+            const items = await hnApi.getBatchItems(ids);
+
+            const stories = await pMap(
+              ids,
+              async (_id, i) => {
                 try {
-                  const item = await loadItem(id);
+                  const item = items[i];
                   if (!item) return null;
                   const base = {
                     id: (item?.id as number | null) ?? null,
@@ -618,7 +753,7 @@ export default blink.agent({
                     let remaining = max_comments;
                     const loadComment = async (
                       cid: number,
-                      depth: number
+                      depth: number,
                     ): Promise<void> => {
                       if (remaining <= 0) return;
                       try {
@@ -639,9 +774,7 @@ export default blink.agent({
                             await loadComment(kid, depth + 1);
                           }
                         }
-                      } catch {
-                        /* ignore */
-                      }
+                      } catch {}
                     };
 
                     for (const kid of item.kids as number[]) {
@@ -658,7 +791,8 @@ export default blink.agent({
                 } catch {
                   return null;
                 }
-              })
+              },
+              12,
             );
 
             const compact = stories.filter(Boolean);
