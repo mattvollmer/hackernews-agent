@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@blink-sdk/slackbot": "^0.0.5",
+    "@blink-sdk/slackbot": "^0.0.7",
     "ai": "^5.0.47",
     "blink": "^0.1.34",
     "esbuild": "^0.25.10",
