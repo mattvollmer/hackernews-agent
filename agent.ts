@@ -14,7 +14,7 @@ const nowMs = () => Date.now();
 const pMap = async <T, R>(
   items: T[],
   mapper: (t: T, i: number) => Promise<R>,
-  concurrency: number,
+  concurrency: number
 ): Promise<R[]> => {
   const ret: R[] = new Array(items.length);
   let idx = 0;
@@ -97,7 +97,7 @@ class HackerNewsAPI {
     if (cached) return cached;
     const val = await this.dedupe<number[]>(key, async () => {
       const data = await this.getJSON<number[]>(
-        `${HN_API_BASE}/topstories.json`,
+        `${HN_API_BASE}/topstories.json`
       );
       this.setCached(key, data, this.ttlTopStories);
       return data;
@@ -166,7 +166,7 @@ const stripHtml = (html: string | null | undefined) => {
 const fetchWithTimeout = async (
   url: string,
   opts: any = {},
-  timeoutMs = 8000,
+  timeoutMs = 8000
 ): Promise<Response> => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -348,7 +348,7 @@ export default blink.agent({
                 .string()
                 .optional()
                 .describe(
-                  "The cursor to use to paginate through the messages.",
+                  "The cursor to use to paginate through the messages."
                 ),
             }),
             execute: async ({ channel, limit, cursor }) => {
@@ -425,7 +425,7 @@ export default blink.agent({
               });
               if (!result.messages?.[0]) {
                 throw new Error(
-                  "Message not found! Ensure the timestamp is formatted as a float.",
+                  "Message not found! Ensure the timestamp is formatted as a float."
                 );
               }
               return {
@@ -549,7 +549,7 @@ export default blink.agent({
                     };
                   }
                 },
-                12,
+                12
               );
 
               return { items };
@@ -622,7 +622,7 @@ export default blink.agent({
                 let remaining = max_comments;
                 const loadComment = async (
                   cid: number,
-                  depth: number,
+                  depth: number
                 ): Promise<any | null> => {
                   if (remaining <= 0) return null;
                   try {
@@ -634,7 +634,7 @@ export default blink.agent({
                       by: c.by ?? null,
                       time: c.time ?? null,
                       time_ago: timeAgo(c.time ?? null),
-                      text: strip_html ? stripHtml(c.text) : (c.text ?? null),
+                      text: strip_html ? stripHtml(c.text) : c.text ?? null,
                       parent: c.parent ?? null,
                       dead: !!c.dead,
                       deleted: !!c.deleted,
@@ -774,7 +774,7 @@ export default blink.agent({
                       let remaining = max_comments;
                       const loadComment = async (
                         cid: number,
-                        depth: number,
+                        depth: number
                       ): Promise<void> => {
                         if (remaining <= 0) return;
                         try {
@@ -813,7 +813,7 @@ export default blink.agent({
                     return null;
                   }
                 },
-                12,
+                12
               );
 
               const compact = stories.filter(Boolean);
@@ -881,7 +881,7 @@ Return ${format} format.`;
               // Ignore
             }
           },
-        },
+        }
       ),
     });
   },
