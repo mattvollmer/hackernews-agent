@@ -3,6 +3,7 @@ import * as blink from "blink";
 import { z } from "zod";
 import { parse } from "node-html-parser";
 import * as slackbot from "@blink-sdk/slackbot";
+import withModelIntent from "@blink-sdk/model-intent";
 
 const HN_API_BASE = "https://hacker-news.firebaseio.com/v0";
 
@@ -13,7 +14,7 @@ const nowMs = () => Date.now();
 const pMap = async <T, R>(
   items: T[],
   mapper: (t: T, i: number) => Promise<R>,
-  concurrency: number,
+  concurrency: number
 ): Promise<R[]> => {
   const ret: R[] = new Array(items.length);
   let idx = 0;
@@ -96,7 +97,7 @@ class HackerNewsAPI {
     if (cached) return cached;
     const val = await this.dedupe<number[]>(key, async () => {
       const data = await this.getJSON<number[]>(
-        `${HN_API_BASE}/topstories.json`,
+        `${HN_API_BASE}/topstories.json`
       );
       this.setCached(key, data, this.ttlTopStories);
       return data;
@@ -165,7 +166,7 @@ const stripHtml = (html: string | null | undefined) => {
 const fetchWithTimeout = async (
   url: string,
   opts: any = {},
-  timeoutMs = 8000,
+  timeoutMs = 8000
 ): Promise<Response> => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -321,7 +322,7 @@ When chatting in Slack channels:
 };
 
 export default blink.agent({
-  async sendMessages({ messages }) {
+  async sendMessages({ messages, abortSignal }) {
     const platform = detectPlatform(messages);
     const systemPrompt = createSystemPrompt(platform);
 
@@ -329,507 +330,559 @@ export default blink.agent({
       model: "anthropic/claude-sonnet-4",
       system: systemPrompt,
       messages: convertToModelMessages(messages),
-      tools: {
-        ...slackbot.tools({
-          messages,
-        }),
-
-        slackbot_read_messages: tool({
-          description:
-            "Read messages from channels by ID. Messages with 'thread_ts' have replies that can be read.",
-          inputSchema: z.object({
-            channel: z.string().describe("The channel to read messages from."),
-            limit: z.number().describe("The number of messages to read."),
-            cursor: z
-              .string()
-              .optional()
-              .describe("The cursor to use to paginate through the messages."),
+      tools: withModelIntent(
+        {
+          ...slackbot.tools({
+            messages,
           }),
-          execute: async ({ channel, limit, cursor }) => {
-            const metadata = slackbot.findLastMessageMetadata(messages);
-            if (!metadata) {
-              throw new Error("This chat isn't from Slack!");
-            }
-            const api = await slackbot.createClient(metadata);
-            const result = await api.conversations.history({
-              channel,
-              limit,
-              cursor,
-            });
-            return {
-              messages: result.messages || [],
-              next_cursor: result.response_metadata?.next_cursor || "",
-            };
-          },
-        }),
 
-        slackbot_read_thread_replies: tool({
-          description: "Read replies to a thread.",
-          inputSchema: z.object({
-            channel: z.string().describe("The channel to read messages from."),
-            thread_ts: z.string().describe("The thread to read replies from."),
-            limit: z.number().describe("The number of replies to read."),
-            cursor: z
-              .string()
-              .optional()
-              .describe("The cursor to use to paginate through the replies."),
-          }),
-          execute: async ({ channel, thread_ts, limit, cursor }) => {
-            const metadata = slackbot.findLastMessageMetadata(messages);
-            if (!metadata) {
-              throw new Error("This chat isn't from Slack!");
-            }
-            const api = await slackbot.createClient(metadata);
-            const result = await api.conversations.replies({
-              channel,
-              ts: thread_ts,
-              limit,
-              cursor,
-            });
-            return {
-              messages: result.messages || [],
-              next_cursor: result.response_metadata?.next_cursor || "",
-            };
-          },
-        }),
-
-        slackbot_read_message: tool({
-          description: "Read a specific message from a channel by timestamp.",
-          inputSchema: z.object({
-            channel: z.string().describe("The channel to read messages from."),
-            ts: z.string().describe("The timestamp of the message to read."),
-          }),
-          execute: async ({ channel, ts }) => {
-            const metadata = slackbot.findLastMessageMetadata(messages);
-            if (!metadata) {
-              throw new Error("This chat isn't from Slack!");
-            }
-            const api = await slackbot.createClient(metadata);
-            const result = await api.conversations.history({
-              channel,
-              latest: ts,
-              limit: 1,
-              inclusive: true,
-            });
-            if (!result.messages?.[0]) {
-              throw new Error(
-                "Message not found! Ensure the timestamp is formatted as a float.",
-              );
-            }
-            return {
-              message: result.messages[0],
-            };
-          },
-        }),
-
-        slackbot_read_user_info: tool({
-          description: "Read information about a user.",
-          inputSchema: z.object({
-            user: z.string().describe("The user to read information about."),
-          }),
-          execute: async ({ user }) => {
-            const metadata = slackbot.findLastMessageMetadata(messages);
-            if (!metadata) {
-              throw new Error("This chat isn't from Slack!");
-            }
-            const api = await slackbot.createClient(metadata);
-            const result = await api.users.info({ user });
-            if (!result.user) {
-              throw new Error("User not found!");
-            }
-            return {
-              user: result.user,
-            };
-          },
-        }),
-
-        fetch_hn_top_articles: tool({
-          description:
-            "Fetch top N HN stories and (optionally) extract readable article text. Includes points, comment count, and time ago.",
-          inputSchema: z.object({
-            limit: z.number().int().min(1).max(30).default(10),
-            include_article: z.boolean().default(false),
-            max_content_chars: z
-              .number()
-              .int()
-              .min(200)
-              .max(20000)
-              .default(1200),
-          }),
-          execute: async ({ limit, include_article, max_content_chars }) => {
-            const ids = (await hnApi.getTopStories()).slice(0, limit);
-            const rawItems = await hnApi.getBatchItems(ids);
-
-            const items = await pMap(
-              ids,
-              async (id, i) => {
-                const item = rawItems[i];
-                try {
-                  const base = {
-                    id: (item?.id as number | null) ?? null,
-                    title: (item?.title as string | null) ?? null,
-                    by: (item?.by as string | null) ?? null,
-                    score: (item?.score as number | null) ?? null,
-                    time: (item?.time as number | null) ?? null,
-                    time_ago: timeAgo(item?.time ?? null),
-                    url: (item?.url as string | undefined) || null,
-                    type: (item?.type as string | null) ?? null,
-                    text: stripHtml(item?.text as string | undefined) || null,
-                    comments_count:
-                      (item?.descendants as number | null) ?? null,
-                    comments_url: item?.id
-                      ? `https://news.ycombinator.com/item?id=${item.id}`
-                      : null,
-                  } as const;
-
-                  if (!item?.url) {
-                    return {
-                      ...base,
-                      content: base.text
-                        ? base.text.slice(0, max_content_chars)
-                        : null,
-                      source: "hn" as const,
-                    };
-                  }
-
-                  if (!include_article) {
-                    return { ...base, content: null, source: "url" as const };
-                  }
-
-                  try {
-                    const res = await fetchWithTimeout(item.url, {
-                      headers: {
-                        "User-Agent":
-                          "hn-summarizer/1.0 (+https://example.com)",
-                      },
-                    });
-                    const html = await res.text();
-                    const content = extractArticleText(html);
-                    return {
-                      ...base,
-                      content: content
-                        ? content.slice(0, max_content_chars)
-                        : null,
-                      source: "url" as const,
-                    };
-                  } catch {
-                    return { ...base, content: null, source: "error" as const };
-                  }
-                } catch {
-                  return {
-                    id,
-                    title: null,
-                    by: null,
-                    score: null,
-                    time: null,
-                    time_ago: null,
-                    url: null,
-                    type: null,
-                    text: null,
-                    comments_count: null,
-                    comments_url: null,
-                    content: null,
-                    source: "error" as const,
-                  };
-                }
-              },
-              12,
-            );
-
-            return { items };
-          },
-        }),
-
-        fetch_hn_item_details: tool({
-          description:
-            "Fetch a single HN item by id, with optional article body and comment tree (configurable depth and limits).",
-          inputSchema: z.object({
-            id: z.number().int(),
-            include_article: z.boolean().default(false),
-            include_comments: z.boolean().default(false),
-            max_depth: z.number().int().min(0).max(5).default(1),
-            max_comments: z.number().int().min(1).max(500).default(50),
-            strip_html: z.boolean().default(true),
-          }),
-          execute: async ({
-            id,
-            include_article,
-            include_comments,
-            max_depth,
-            max_comments,
-            strip_html,
-          }) => {
-            const loadItem = async (itemId: number) => hnApi.getItem(itemId);
-
-            const item = await loadItem(id);
-            if (!item) return { error: "not_found", id } as const;
-
-            const base = {
-              id: (item?.id as number | null) ?? null,
-              title: (item?.title as string | null) ?? null,
-              by: (item?.by as string | null) ?? null,
-              score: (item?.score as number | null) ?? null,
-              time: (item?.time as number | null) ?? null,
-              time_ago: timeAgo(item?.time ?? null),
-              url: (item?.url as string | undefined) || null,
-              type: (item?.type as string | null) ?? null,
-              text: strip_html
-                ? stripHtml(item?.text as string | undefined)
-                : (item?.text as string | undefined) || null,
-              comments_count: (item?.descendants as number | null) ?? null,
-              comments_url: item?.id
-                ? `https://news.ycombinator.com/item?id=${item.id}`
-                : null,
-            };
-
-            let article_content: string | null = null;
-            if (include_article && item?.url) {
-              try {
-                const res = await fetch(item.url, {
-                  headers: {
-                    "User-Agent": "hn-summarizer/1.0 (+https://example.com)",
-                  },
-                });
-                const html = await res.text();
-                article_content = extractArticleText(html);
-              } catch {
-                article_content = null;
+          slackbot_read_messages: tool({
+            description:
+              "Read messages from channels by ID. Messages with 'thread_ts' have replies that can be read.",
+            inputSchema: z.object({
+              channel: z
+                .string()
+                .describe("The channel to read messages from."),
+              limit: z.number().describe("The number of messages to read."),
+              cursor: z
+                .string()
+                .optional()
+                .describe(
+                  "The cursor to use to paginate through the messages."
+                ),
+            }),
+            execute: async ({ channel, limit, cursor }) => {
+              const metadata = slackbot.findLastMessageMetadata(messages);
+              if (!metadata) {
+                throw new Error("This chat isn't from Slack!");
               }
-            }
-
-            let comments: any[] | null = null;
-            if (
-              include_comments &&
-              Array.isArray(item?.kids) &&
-              item.kids.length
-            ) {
-              let remaining = max_comments;
-              const loadComment = async (
-                cid: number,
-                depth: number,
-              ): Promise<any | null> => {
-                if (remaining <= 0) return null;
-                try {
-                  const c = await loadItem(cid);
-                  if (!c || c?.type !== "comment") return null;
-                  remaining -= 1;
-                  const node: any = {
-                    id: c.id ?? null,
-                    by: c.by ?? null,
-                    time: c.time ?? null,
-                    time_ago: timeAgo(c.time ?? null),
-                    text: strip_html ? stripHtml(c.text) : (c.text ?? null),
-                    parent: c.parent ?? null,
-                    dead: !!c.dead,
-                    deleted: !!c.deleted,
-                    kids_count: Array.isArray(c.kids) ? c.kids.length : 0,
-                    children: [] as any[],
-                  };
-                  if (
-                    depth < max_depth &&
-                    Array.isArray(c.kids) &&
-                    c.kids.length &&
-                    remaining > 0
-                  ) {
-                    const children: any[] = [];
-                    for (const kid of c.kids) {
-                      if (remaining <= 0) break;
-                      const child = await loadComment(kid, depth + 1);
-                      if (child) children.push(child);
-                    }
-                    node.children = children;
-                  }
-                  return node;
-                } catch {
-                  return null;
-                }
+              const api = await slackbot.createClient(metadata);
+              const result = await api.conversations.history({
+                channel,
+                limit,
+                cursor,
+              });
+              return {
+                messages: result.messages || [],
+                next_cursor: result.response_metadata?.next_cursor || "",
               };
-
-              const topLevel: any[] = [];
-              for (const kid of item.kids as number[]) {
-                if (remaining <= 0) break;
-                const node = await loadComment(kid, 0);
-                if (node) topLevel.push(node);
-              }
-              comments = topLevel;
-            }
-
-            return {
-              item: base,
-              article_content,
-              comments,
-            };
-          },
-        }),
-
-        summarize_hn_tldr: tool({
-          description:
-            "Create TLDR bullet points for stories and summarize overall sentiment/feedback based on comments.",
-          inputSchema: z.object({
-            story_ids: z.array(z.number().int()).optional(),
-            limit: z.number().int().min(1).max(30).default(3),
-            include_article: z.boolean().default(true),
-            include_comments: z.boolean().default(false),
-            max_depth: z.number().int().min(0).max(3).default(1),
-            max_comments: z.number().int().min(1).max(100).default(10),
-            max_article_chars: z
-              .number()
-              .int()
-              .min(200)
-              .max(2000)
-              .default(2000),
-            max_comment_chars: z.number().int().min(50).max(2000).default(500),
-            format: z.enum(["markdown", "json"]).default("markdown"),
+            },
           }),
-          execute: async (args) => {
-            const {
-              story_ids,
-              limit,
-              include_article,
-              include_comments,
-              max_depth,
-              max_comments,
-              max_article_chars,
-              max_comment_chars,
-              format,
-            } = args;
 
-            const loadItem = async (itemId: number) => hnApi.getItem(itemId);
+          slackbot_read_thread_replies: tool({
+            description: "Read replies to a thread.",
+            inputSchema: z.object({
+              channel: z
+                .string()
+                .describe("The channel to read messages from."),
+              thread_ts: z
+                .string()
+                .describe("The thread to read replies from."),
+              limit: z.number().describe("The number of replies to read."),
+              cursor: z
+                .string()
+                .optional()
+                .describe("The cursor to use to paginate through the replies."),
+            }),
+            execute: async ({ channel, thread_ts, limit, cursor }) => {
+              const metadata = slackbot.findLastMessageMetadata(messages);
+              if (!metadata) {
+                throw new Error("This chat isn't from Slack!");
+              }
+              const api = await slackbot.createClient(metadata);
+              const result = await api.conversations.replies({
+                channel,
+                ts: thread_ts,
+                limit,
+                cursor,
+              });
+              return {
+                messages: result.messages || [],
+                next_cursor: result.response_metadata?.next_cursor || "",
+              };
+            },
+          }),
 
-            let ids: number[] = story_ids ?? [];
-            if (!ids.length) {
-              ids = (await hnApi.getTopStories()).slice(0, limit);
-            }
+          slackbot_read_message: tool({
+            description: "Read a specific message from a channel by timestamp.",
+            inputSchema: z.object({
+              channel: z
+                .string()
+                .describe("The channel to read messages from."),
+              ts: z.string().describe("The timestamp of the message to read."),
+            }),
+            execute: async ({ channel, ts }) => {
+              const metadata = slackbot.findLastMessageMetadata(messages);
+              if (!metadata) {
+                throw new Error("This chat isn't from Slack!");
+              }
+              const api = await slackbot.createClient(metadata);
+              const result = await api.conversations.history({
+                channel,
+                latest: ts,
+                limit: 1,
+                inclusive: true,
+              });
+              if (!result.messages?.[0]) {
+                throw new Error(
+                  "Message not found! Ensure the timestamp is formatted as a float."
+                );
+              }
+              return {
+                message: result.messages[0],
+              };
+            },
+          }),
 
-            const items = await hnApi.getBatchItems(ids);
+          slackbot_read_user_info: tool({
+            description: "Read information about a user.",
+            inputSchema: z.object({
+              user: z.string().describe("The user to read information about."),
+            }),
+            execute: async ({ user }) => {
+              const metadata = slackbot.findLastMessageMetadata(messages);
+              if (!metadata) {
+                throw new Error("This chat isn't from Slack!");
+              }
+              const api = await slackbot.createClient(metadata);
+              const result = await api.users.info({ user });
+              if (!result.user) {
+                throw new Error("User not found!");
+              }
+              return {
+                user: result.user,
+              };
+            },
+          }),
 
-            const stories = await pMap(
-              ids,
-              async (_id, i) => {
-                try {
-                  const item = items[i];
-                  if (!item) return null;
-                  const base = {
-                    id: (item?.id as number | null) ?? null,
-                    title: (item?.title as string | null) ?? null,
-                    by: (item?.by as string | null) ?? null,
-                    score: (item?.score as number | null) ?? null,
-                    time: (item?.time as number | null) ?? null,
-                    time_ago: timeAgo(item?.time ?? null),
-                    url: (item?.url as string | undefined) || null,
-                    type: (item?.type as string | null) ?? null,
-                    text: stripHtml(item?.text as string | undefined),
-                    comments_count:
-                      (item?.descendants as number | null) ?? null,
-                    comments_url: item?.id
-                      ? `https://news.ycombinator.com/item?id=${item.id}`
-                      : null,
-                  };
+          fetch_hn_top_articles: tool({
+            description:
+              "Fetch top N HN stories and (optionally) extract readable article text. Includes points, comment count, and time ago.",
+            inputSchema: z.object({
+              limit: z.number().int().min(1).max(30).default(10),
+              include_article: z.boolean().default(false),
+              max_content_chars: z
+                .number()
+                .int()
+                .min(200)
+                .max(20000)
+                .default(1200),
+            }),
+            execute: async ({ limit, include_article, max_content_chars }) => {
+              const ids = (await hnApi.getTopStories()).slice(0, limit);
+              const rawItems = await hnApi.getBatchItems(ids);
 
-                  let article_excerpt: string | null = null;
-                  if (include_article && item?.url) {
+              const items = await pMap(
+                ids,
+                async (id, i) => {
+                  const item = rawItems[i];
+                  try {
+                    const base = {
+                      id: (item?.id as number | null) ?? null,
+                      title: (item?.title as string | null) ?? null,
+                      by: (item?.by as string | null) ?? null,
+                      score: (item?.score as number | null) ?? null,
+                      time: (item?.time as number | null) ?? null,
+                      time_ago: timeAgo(item?.time ?? null),
+                      url: (item?.url as string | undefined) || null,
+                      type: (item?.type as string | null) ?? null,
+                      text: stripHtml(item?.text as string | undefined) || null,
+                      comments_count:
+                        (item?.descendants as number | null) ?? null,
+                      comments_url: item?.id
+                        ? `https://news.ycombinator.com/item?id=${item.id}`
+                        : null,
+                    } as const;
+
+                    if (!item?.url) {
+                      return {
+                        ...base,
+                        content: base.text
+                          ? base.text.slice(0, max_content_chars)
+                          : null,
+                        source: "hn" as const,
+                      };
+                    }
+
+                    if (!include_article) {
+                      return { ...base, content: null, source: "url" as const };
+                    }
+
                     try {
-                      const res = await fetch(item.url, {
+                      const res = await fetchWithTimeout(item.url, {
                         headers: {
                           "User-Agent":
                             "hn-summarizer/1.0 (+https://example.com)",
                         },
                       });
                       const html = await res.text();
-                      const text = extractArticleText(html);
-                      if (text)
-                        article_excerpt = text.slice(0, max_article_chars);
+                      const content = extractArticleText(html);
+                      return {
+                        ...base,
+                        content: content
+                          ? content.slice(0, max_content_chars)
+                          : null,
+                        source: "url" as const,
+                      };
                     } catch {
-                      article_excerpt = null;
+                      return {
+                        ...base,
+                        content: null,
+                        source: "error" as const,
+                      };
                     }
+                  } catch {
+                    return {
+                      id,
+                      title: null,
+                      by: null,
+                      score: null,
+                      time: null,
+                      time_ago: null,
+                      url: null,
+                      type: null,
+                      text: null,
+                      comments_count: null,
+                      comments_url: null,
+                      content: null,
+                      source: "error" as const,
+                    };
                   }
+                },
+                12
+              );
 
-                  const flatComments: string[] = [];
-                  if (
-                    include_comments &&
-                    Array.isArray(item?.kids) &&
-                    item.kids.length
-                  ) {
-                    let remaining = max_comments;
-                    const loadComment = async (
-                      cid: number,
-                      depth: number,
-                    ): Promise<void> => {
-                      if (remaining <= 0) return;
-                      try {
-                        const c = await loadItem(cid);
-                        if (!c || c?.type !== "comment") return;
-                        remaining -= 1;
-                        const txt = stripHtml(c.text) || "";
-                        if (txt)
-                          flatComments.push(txt.slice(0, max_comment_chars));
-                        if (
-                          depth < max_depth &&
-                          Array.isArray(c.kids) &&
-                          c.kids.length &&
-                          remaining > 0
-                        ) {
-                          for (const kid of c.kids) {
-                            if (remaining <= 0) break;
-                            await loadComment(kid, depth + 1);
-                          }
-                        }
-                      } catch {}
+              return { items };
+            },
+          }),
+
+          fetch_hn_item_details: tool({
+            description:
+              "Fetch a single HN item by id, with optional article body and comment tree (configurable depth and limits).",
+            inputSchema: z.object({
+              id: z.number().int(),
+              include_article: z.boolean().default(false),
+              include_comments: z.boolean().default(false),
+              max_depth: z.number().int().min(0).max(5).default(1),
+              max_comments: z.number().int().min(1).max(500).default(50),
+              strip_html: z.boolean().default(true),
+            }),
+            execute: async ({
+              id,
+              include_article,
+              include_comments,
+              max_depth,
+              max_comments,
+              strip_html,
+            }) => {
+              const loadItem = async (itemId: number) => hnApi.getItem(itemId);
+
+              const item = await loadItem(id);
+              if (!item) return { error: "not_found", id } as const;
+
+              const base = {
+                id: (item?.id as number | null) ?? null,
+                title: (item?.title as string | null) ?? null,
+                by: (item?.by as string | null) ?? null,
+                score: (item?.score as number | null) ?? null,
+                time: (item?.time as number | null) ?? null,
+                time_ago: timeAgo(item?.time ?? null),
+                url: (item?.url as string | undefined) || null,
+                type: (item?.type as string | null) ?? null,
+                text: strip_html
+                  ? stripHtml(item?.text as string | undefined)
+                  : (item?.text as string | undefined) || null,
+                comments_count: (item?.descendants as number | null) ?? null,
+                comments_url: item?.id
+                  ? `https://news.ycombinator.com/item?id=${item.id}`
+                  : null,
+              };
+
+              let article_content: string | null = null;
+              if (include_article && item?.url) {
+                try {
+                  const res = await fetch(item.url, {
+                    headers: {
+                      "User-Agent": "hn-summarizer/1.0 (+https://example.com)",
+                    },
+                  });
+                  const html = await res.text();
+                  article_content = extractArticleText(html);
+                } catch {
+                  article_content = null;
+                }
+              }
+
+              let comments: any[] | null = null;
+              if (
+                include_comments &&
+                Array.isArray(item?.kids) &&
+                item.kids.length
+              ) {
+                let remaining = max_comments;
+                const loadComment = async (
+                  cid: number,
+                  depth: number
+                ): Promise<any | null> => {
+                  if (remaining <= 0) return null;
+                  try {
+                    const c = await loadItem(cid);
+                    if (!c || c?.type !== "comment") return null;
+                    remaining -= 1;
+                    const node: any = {
+                      id: c.id ?? null,
+                      by: c.by ?? null,
+                      time: c.time ?? null,
+                      time_ago: timeAgo(c.time ?? null),
+                      text: strip_html ? stripHtml(c.text) : c.text ?? null,
+                      parent: c.parent ?? null,
+                      dead: !!c.dead,
+                      deleted: !!c.deleted,
+                      kids_count: Array.isArray(c.kids) ? c.kids.length : 0,
+                      children: [] as any[],
+                    };
+                    if (
+                      depth < max_depth &&
+                      Array.isArray(c.kids) &&
+                      c.kids.length &&
+                      remaining > 0
+                    ) {
+                      const children: any[] = [];
+                      for (const kid of c.kids) {
+                        if (remaining <= 0) break;
+                        const child = await loadComment(kid, depth + 1);
+                        if (child) children.push(child);
+                      }
+                      node.children = children;
+                    }
+                    return node;
+                  } catch {
+                    return null;
+                  }
+                };
+
+                const topLevel: any[] = [];
+                for (const kid of item.kids as number[]) {
+                  if (remaining <= 0) break;
+                  const node = await loadComment(kid, 0);
+                  if (node) topLevel.push(node);
+                }
+                comments = topLevel;
+              }
+
+              return {
+                item: base,
+                article_content,
+                comments,
+              };
+            },
+          }),
+
+          summarize_hn_tldr: tool({
+            description:
+              "Create TLDR bullet points for stories and summarize overall sentiment/feedback based on comments.",
+            inputSchema: z.object({
+              story_ids: z.array(z.number().int()).optional(),
+              limit: z.number().int().min(1).max(30).default(3),
+              include_article: z.boolean().default(true),
+              include_comments: z.boolean().default(false),
+              max_depth: z.number().int().min(0).max(3).default(1),
+              max_comments: z.number().int().min(1).max(100).default(10),
+              max_article_chars: z
+                .number()
+                .int()
+                .min(200)
+                .max(2000)
+                .default(2000),
+              max_comment_chars: z
+                .number()
+                .int()
+                .min(50)
+                .max(2000)
+                .default(500),
+              format: z.enum(["markdown", "json"]).default("markdown"),
+            }),
+            execute: async (args) => {
+              const {
+                story_ids,
+                limit,
+                include_article,
+                include_comments,
+                max_depth,
+                max_comments,
+                max_article_chars,
+                max_comment_chars,
+                format,
+              } = args;
+
+              const loadItem = async (itemId: number) => hnApi.getItem(itemId);
+
+              let ids: number[] = story_ids ?? [];
+              if (!ids.length) {
+                ids = (await hnApi.getTopStories()).slice(0, limit);
+              }
+
+              const items = await hnApi.getBatchItems(ids);
+
+              const stories = await pMap(
+                ids,
+                async (_id, i) => {
+                  try {
+                    const item = items[i];
+                    if (!item) return null;
+                    const base = {
+                      id: (item?.id as number | null) ?? null,
+                      title: (item?.title as string | null) ?? null,
+                      by: (item?.by as string | null) ?? null,
+                      score: (item?.score as number | null) ?? null,
+                      time: (item?.time as number | null) ?? null,
+                      time_ago: timeAgo(item?.time ?? null),
+                      url: (item?.url as string | undefined) || null,
+                      type: (item?.type as string | null) ?? null,
+                      text: stripHtml(item?.text as string | undefined),
+                      comments_count:
+                        (item?.descendants as number | null) ?? null,
+                      comments_url: item?.id
+                        ? `https://news.ycombinator.com/item?id=${item.id}`
+                        : null,
                     };
 
-                    for (const kid of item.kids as number[]) {
-                      if (remaining <= 0) break;
-                      await loadComment(kid, 0);
+                    let article_excerpt: string | null = null;
+                    if (include_article && item?.url) {
+                      try {
+                        const res = await fetch(item.url, {
+                          headers: {
+                            "User-Agent":
+                              "hn-summarizer/1.0 (+https://example.com)",
+                          },
+                        });
+                        const html = await res.text();
+                        const text = extractArticleText(html);
+                        if (text)
+                          article_excerpt = text.slice(0, max_article_chars);
+                      } catch {
+                        article_excerpt = null;
+                      }
                     }
+
+                    const flatComments: string[] = [];
+                    if (
+                      include_comments &&
+                      Array.isArray(item?.kids) &&
+                      item.kids.length
+                    ) {
+                      let remaining = max_comments;
+                      const loadComment = async (
+                        cid: number,
+                        depth: number
+                      ): Promise<void> => {
+                        if (remaining <= 0) return;
+                        try {
+                          const c = await loadItem(cid);
+                          if (!c || c?.type !== "comment") return;
+                          remaining -= 1;
+                          const txt = stripHtml(c.text) || "";
+                          if (txt)
+                            flatComments.push(txt.slice(0, max_comment_chars));
+                          if (
+                            depth < max_depth &&
+                            Array.isArray(c.kids) &&
+                            c.kids.length &&
+                            remaining > 0
+                          ) {
+                            for (const kid of c.kids) {
+                              if (remaining <= 0) break;
+                              await loadComment(kid, depth + 1);
+                            }
+                          }
+                        } catch {}
+                      };
+
+                      for (const kid of item.kids as number[]) {
+                        if (remaining <= 0) break;
+                        await loadComment(kid, 0);
+                      }
+                    }
+
+                    return {
+                      ...base,
+                      article_excerpt,
+                      comments_sample: flatComments,
+                    };
+                  } catch {
+                    return null;
                   }
+                },
+                12
+              );
 
-                  return {
-                    ...base,
-                    article_excerpt,
-                    comments_sample: flatComments,
-                  };
-                } catch {
-                  return null;
-                }
-              },
-              12,
-            );
+              const compact = stories.filter(Boolean);
 
-            const compact = stories.filter(Boolean);
-
-            const prompt = `You are generating concise TLDRs for Hacker News items. For each story:
+              const prompt = `You are generating concise TLDRs for Hacker News items. For each story:
 - Include links, points, comment count, and time ago.
             - Provide 2–3 bullet points summarizing what the story is about (based on title, article excerpt, or Ask HN text).
 - Provide overall sentiment and 2–3 bullets of feedback/themes observed in the comments sample.
 - Be neutral and factual; avoid speculation.
 Return ${format} format.`;
 
-            const { text } = await generateText({
-              model: "anthropic/claude-sonnet-4",
-              system: prompt,
-              prompt: JSON.stringify(compact, null, 2),
-            });
+              const { text } = await generateText({
+                model: "anthropic/claude-sonnet-4",
+                system: prompt,
+                prompt: JSON.stringify(compact, null, 2),
+              });
 
-            if (format === "json") {
-              try {
-                const parsed = JSON.parse(text);
-                return {
-                  format,
-                  stories_count: compact.length,
-                  output: parsed,
-                };
-              } catch {
-                return {
-                  format,
-                  stories_count: compact.length,
-                  output_raw: text,
-                };
+              if (format === "json") {
+                try {
+                  const parsed = JSON.parse(text);
+                  return {
+                    format,
+                    stories_count: compact.length,
+                    output: parsed,
+                  };
+                } catch {
+                  return {
+                    format,
+                    stories_count: compact.length,
+                    output_raw: text,
+                  };
+                }
               }
+              return { format, stories_count: compact.length, output: text };
+            },
+          }),
+        },
+        {
+          async onModelIntents(modelIntents) {
+            if (abortSignal?.aborted) {
+              return;
             }
-            return { format, stories_count: compact.length, output: text };
+            const metadata = slackbot.findLastMessageMetadata(messages);
+            if (!metadata) {
+              return;
+            }
+            let statuses = modelIntents.map((i) => {
+              let displayIntent = i.modelIntent;
+              if (displayIntent.length > 0) {
+                displayIntent =
+                  displayIntent.charAt(0).toLowerCase() +
+                  displayIntent.slice(1);
+              }
+              return displayIntent;
+            });
+            statuses = [...new Set(statuses)];
+            const client = await slackbot.createClient(metadata);
+            try {
+              await client.assistant.threads.setStatus({
+                channel_id: metadata.channel,
+                thread_ts: metadata.threadTs ?? metadata.ts,
+                status: `is ${statuses.join(", ")}...`,
+              });
+            } catch (err) {
+              // Ignore
+            }
           },
-        }),
-      },
+        }
+      ),
     });
   },
   async webhook(request) {
