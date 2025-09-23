@@ -12,6 +12,7 @@
     "zod": "^4.1.9"
   },
   "devDependencies": {
-    "@types/node": "^24.5.2"
+    "@types/node": "^24.5.2",
+    "@blink-sdk/model-intent": "^0.0.3"
   }
 }
